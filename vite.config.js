@@ -183,7 +183,12 @@ function aisanBackendPlugin() {
                           const buffer = Buffer.from(matches[2], 'base64')
                           const safeAldeia = (reportItem.aldeia || 'Aldeia').replace(/[^a-zA-Z0-9_\-\u00C0-\u017F]/g, '_')
                           const photoFileName = `${safeName}_${safeAldeia}_${reportItem.data}_foto${idx + 1}_${reportItem.id}.${ext}`
+                          
+                          // 1. Salva na subpasta Fotos_Relatorios
                           fs.writeFileSync(path.join(photosDir, photoFileName), buffer)
+
+                          // 2. Salva TAMBÉM solta direto na pasta raiz AISAN_Dados para ver na hora!
+                          fs.writeFileSync(path.join(dir, photoFileName), buffer)
                         }
                       } catch (photoErr) {
                         console.warn('Erro ao salvar foto individual:', photoErr)
