@@ -78,8 +78,8 @@ function aisanBackendPlugin() {
 
         // CORS headers for mobile network access
         res.setHeader('Access-Control-Allow-Origin', '*')
-        res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
-        res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
+        res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS')
+        res.setHeader('Access-Control-Allow-Headers', '*')
 
         if (req.method === 'OPTIONS') {
           res.statusCode = 204
@@ -330,6 +330,7 @@ function aisanBackendPlugin() {
 
 // https://vite.dev/config/
 export default defineConfig({
+  base: '/aisan-conectado/',
   server: {
     host: true, // Escuta em 0.0.0.0 para aceitar conexões do celular na rede
     port: 5173,

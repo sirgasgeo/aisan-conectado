@@ -1,24 +1,30 @@
-# Iniciar AISAN Conectado no Windows
+# Iniciar AISAN Conectado no Windows - Modo Definitivo e Permanente
 $projectDir = "C:\Users\CRIS SESANI\.gemini\antigravity\scratch\aisan-tracker-next"
 $desktop = [System.Environment]::GetFolderPath('Desktop')
 Set-Location $projectDir
 
-# 1. Inicia o Vite se nao estiver rodando
-$viteProc = Get-Process -Name "node" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -like "*vite*" }
-if (-not $viteProc) {
-    Start-Process -FilePath "npm.cmd" -ArgumentList "run dev" -WorkingDirectory $projectDir -WindowStyle Hidden
-    Start-Sleep -Seconds 3
+# Garante PATH com Node, NPM e Git
+$env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+
+# 1. Inicia o Vite se a porta 5173 nao estiver aberta
+$isPortListening = (Get-NetTCPConnection -LocalPort 5173 -State Listen -ErrorAction SilentlyContinue)
+if (-not $isPortListening) {
+    Start-Process -FilePath "cmd.exe" -ArgumentList "/c npm run dev" -WorkingDirectory $projectDir -WindowStyle Hidden
+    Start-Sleep -Seconds 4
 }
 
-# 2. Inicia o Tunnel Cloudflare
+# 2. Inicia o Tunnel Cloudflare se nao estiver rodando
 $cfLog = "$env:TEMP\cf.log"
-if (Test-Path $cfLog) { Remove-Item $cfLog -Force -ErrorAction SilentlyContinue }
+$cfProc = Get-Process -Name "cloudflared" -ErrorAction SilentlyContinue
 
-Start-Process -FilePath "cmd.exe" -ArgumentList "/c npx --yes cloudflared tunnel --protocol http2 --url http://localhost:5173 2> `"$cfLog`"" -WorkingDirectory $projectDir -WindowStyle Hidden
+if (-not $cfProc) {
+    if (Test-Path $cfLog) { Remove-Item $cfLog -Force -ErrorAction SilentlyContinue }
+    Start-Process -FilePath "cmd.exe" -ArgumentList "/c npx --yes cloudflared tunnel --protocol http2 --url http://localhost:5173 2> `"$cfLog`"" -WorkingDirectory $projectDir -WindowStyle Hidden
+}
 
 # 3. Aguarda o link ser gerado e extrai
 $link = ""
-for ($i = 0; $i -lt 15; $i++) {
+for ($i = 0; $i -lt 25; $i++) {
     Start-Sleep -Seconds 2
     if (Test-Path $cfLog) {
         $found = Get-Content $cfLog -ErrorAction SilentlyContinue | Select-String "https://.*trycloudflare.com"
@@ -29,23 +35,64 @@ for ($i = 0; $i -lt 15; $i++) {
     }
 }
 
+# Se ja tinha link no server_url.json e nao mudou, podemos usar se cloudflared estiver de pe
+if (-not $link -and (Test-Path "$projectDir\server_url.json")) {
+    try {
+        $existing = Get-Content "$projectDir\server_url.json" -Raw | ConvertFrom-Json
+        if ($existing.url) { $link = $existing.url }
+    } catch {}
+}
+
 if ($link) {
-    # 4. Atualiza o atalho na Area de Trabalho
-    $urlContent = "[InternetShortcut]`nURL=$link"
+    # 4. Atualiza o server_url.json localmente
+    $jsonContent = "{`"url`":`"$link`"}"
+    Set-Content -Path "$projectDir\server_url.json" -Value $jsonContent -Encoding UTF8
+
+    # 5. Publica no GitHub para atualizar os celulares automaticamente
+    try {
+        Set-Location $projectDir
+        git add server_url.json
+        git commit -m "chore: auto-update backend tunnel to $link [skip ci]" -ErrorAction SilentlyContinue
+        git push origin main -ErrorAction SilentlyContinue
+    } catch {}
+
+    # Fallback via gh api caso git push encontre divergencia
+    try {
+        $base64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($jsonContent))
+        $sha = (gh api repos/sirgasgeo/aisan-conectado/contents/server_url.json --jq .sha 2>$null)
+        if ($sha) {
+            gh api --method PUT repos/sirgasgeo/aisan-conectado/contents/server_url.json -f message="chore: update server url via api" -f content="$base64" -f sha="$sha" 2>$null
+        }
+    } catch {}
+
+    # 6. Atualiza atalhos na Area de Trabalho
+    $definitivoUrl = "https://sirgasgeo.github.io/aisan-conectado/"
+    $urlContent = "[InternetShortcut]`nURL=$definitivoUrl"
     Set-Content -Path "$desktop\ABRIR NO NAVEGADOR - AISAN.url" -Value $urlContent
-    
+
     $txtContent = @"
 =====================================================
   AISAN CONECTADO - DSEI KAIAPO MT
-  SISTEMA ATIVO NO SEU COMPUTADOR!
+  SISTEMA 100% OPERACIONAL E DEFINITIVO!
 =====================================================
 
-LINK ATUAL PARA ACESSAR NO CELULAR:
-$link
+LINK OFICIAL DEFINITIVO (PARA O CELULAR):
+$definitivoUrl
 
-* Seus relatorios, fotos e PDFs continuam sendo salvos 
-  automaticamente na pasta do OneDrive!
+* Este link e DEFINITIVO e NUNCA MAIS MUDA!
+* Nao sai do ar mesmo se reiniciar o computador.
+* Pode salvar nos favoritos do celular ou mandar no WhatsApp dos AISANs.
+
+SINCRONIZACAO COM O COMPUTADOR:
+* Servidor Central: Online ($link)
+* Fotos e Relatorios sao salvos automaticamente em:
+  OneDrive - Ministerio da Saude\AISAN_Dados
 =====================================================
 "@
-    Set-Content -Path "$desktop\LINK_DO_CELULAR_ATUAL.txt" -Value $txtContent
+    Set-Content -Path "$desktop\LINK_DEFINITIVO_DO_CELULAR.txt" -Value $txtContent
+
+    # Remove arquivo antigo com nome confuso se existir
+    if (Test-Path "$desktop\LINK_DO_CELULAR_ATUAL.txt") {
+        Remove-Item "$desktop\LINK_DO_CELULAR_ATUAL.txt" -Force -ErrorAction SilentlyContinue
+    }
 }

@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
 import { getSupabaseClient, getSupabaseCredentials } from './lib/supabase'
+import { apiFetch, getApiBaseUrl } from './lib/api'
 import './App.css'
 
 const POLOS_KAIAPO = [
@@ -55,8 +56,11 @@ function App() {
   const [supaUrlInput, setSupaUrlInput] = useState(getSupabaseCredentials().url)
   const [supaKeyInput, setSupaKeyInput] = useState(getSupabaseCredentials().key)
 
-  // Carregar relatórios locais do AISAN
+  // Carregar relatórios locais do AISAN e inicializar conexão com servidor central
   useEffect(() => {
+    // Inicializa a descoberta dinâmica do servidor do Paulo no OneDrive
+    getApiBaseUrl()
+
     try {
       const saved = localStorage.getItem('aisan_meus_relatorios')
       if (saved) {
@@ -105,7 +109,7 @@ function App() {
 
     // 2. Fallback para backend local / OneDrive
     try {
-      const res = await fetch('/api/reports')
+      const res = await apiFetch('/api/reports')
       if (res.ok) {
         const data = await res.json()
         setAllReports(Array.isArray(data) ? data : [])
@@ -257,7 +261,7 @@ function App() {
 
     // 2. Envia para o servidor local / OneDrive se conectado
     try {
-      const res = await fetch('/api/reports', {
+      const res = await apiFetch('/api/reports', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(newReport)
@@ -442,7 +446,7 @@ function App() {
 
       // 1. Salva automaticamente na pasta do OneDrive (OneDrive\AISAN_Dados)
       try {
-        await fetch(`/api/onedrive/pdf?user=${encodeURIComponent(report.aisanNome)}&aldeia=${encodeURIComponent(report.aldeia)}&reportId=${report.id}`, {
+        await apiFetch(`/api/onedrive/pdf?user=${encodeURIComponent(report.aisanNome)}&aldeia=${encodeURIComponent(report.aldeia)}&reportId=${report.id}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/pdf' },
           body: pdfBlob
@@ -489,7 +493,7 @@ function App() {
     }
 
     try {
-      await fetch('/api/reports/status', {
+      await apiFetch('/api/reports/status', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -538,7 +542,7 @@ function App() {
     }
 
     try {
-      await fetch('/api/reports/delete', {
+      await apiFetch('/api/reports/delete', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id: reportId })
@@ -1028,7 +1032,7 @@ function App() {
                     className="btn-sesani-action btn-folder-action"
                     onClick={async () => {
                       try {
-                        const res = await fetch('/api/open-folder')
+                        const res = await apiFetch('/api/open-folder')
                         const data = await res.json()
                         if (data.success) {
                           alert(`📂 Pasta aberta no computador:\n${data.folder}\n\nTodos os relatórios, fotos e PDFs estão sincronizados no OneDrive!`)
