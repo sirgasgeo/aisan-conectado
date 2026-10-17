@@ -334,6 +334,11 @@ export default defineConfig({
   server: {
     host: true, // Escuta em 0.0.0.0 para aceitar conexões do celular na rede
     port: 5173,
+    cors: {
+      origin: '*',
+      methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+      allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin']
+    },
     allowedHosts: true // Permite acesso por tunnels públicos (Cloudflare, etc.) sem erro 403
   },
   plugins: [react(), aisanBackendPlugin()],

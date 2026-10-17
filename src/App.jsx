@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
 import { getSupabaseClient, getSupabaseCredentials } from './lib/supabase'
-import { apiFetch, getApiBaseUrl } from './lib/api'
+import { apiFetch, getApiBaseUrl, checkServerHealth } from './lib/api'
 import './App.css'
 
 const POLOS_KAIAPO = [
@@ -56,10 +56,34 @@ function App() {
   const [supaUrlInput, setSupaUrlInput] = useState(getSupabaseCredentials().url)
   const [supaKeyInput, setSupaKeyInput] = useState(getSupabaseCredentials().key)
 
+  // Status de conexão com o computador central (OneDrive)
+  const [isServerOnline, setIsServerOnline] = useState(false)
+  const [isCheckingServer, setIsCheckingServer] = useState(false)
+
+  const verifyServerConnection = useCallback(async (showMessage = false) => {
+    setIsCheckingServer(true)
+    const online = await checkServerHealth()
+    setIsServerOnline(online)
+    setIsCheckingServer(false)
+    if (showMessage) {
+      if (online) {
+        alert('🟢 Central SESANI Conectada!\n\nSeu computador está sincronizado. Todos os relatórios e fotos enviados cairão diretamente na pasta do OneDrive.')
+      } else {
+        alert('🟡 Central SESANI em espera.\n\nTentando conectar ao servidor do seu computador. Os relatórios continuam sendo salvos com segurança no aparelho.')
+      }
+    }
+    return online
+  }, [])
+
   // Carregar relatórios locais do AISAN e inicializar conexão com servidor central
   useEffect(() => {
     // Inicializa a descoberta dinâmica do servidor do Paulo no OneDrive
     getApiBaseUrl()
+    verifyServerConnection()
+
+    const interval = setInterval(() => {
+      verifyServerConnection()
+    }, 20000)
 
     try {
       const saved = localStorage.getItem('aisan_meus_relatorios')
@@ -69,7 +93,9 @@ function App() {
     } catch (e) {
       console.warn('Erro ao carregar relatórios locais:', e)
     }
-  }, [])
+
+    return () => clearInterval(interval)
+  }, [verifyServerConnection])
 
   // Carregar relatórios do SESANI
   const loadSesaniReports = useCallback(async () => {
@@ -593,6 +619,16 @@ function App() {
             <h1 className="header-app-title">AISAN CONECTADO</h1>
             <p className="header-app-sub">DSEI Kaiapó MT • SESANI</p>
           </div>
+        </div>
+        <div className="header-status-wrapper">
+          <button 
+            type="button" 
+            className={`server-status-pill ${isServerOnline ? 'online' : 'offline'}`}
+            onClick={() => verifyServerConnection(true)}
+            title="Toque para testar conexão com o computador do SESANI"
+          >
+            {isCheckingServer ? '🔄 Verificando...' : isServerOnline ? '🟢 Central Conectada' : '🟡 Conectando Central...'}
+          </button>
         </div>
       </header>
 
