@@ -3,7 +3,7 @@ $projectDir = "C:\Users\CRIS SESANI\.gemini\antigravity\scratch\aisan-tracker-ne
 $desktop = [System.Environment]::GetFolderPath('Desktop')
 Set-Location $projectDir
 
-# Garante PATH com Node, NPM e Git
+# Garante PATH com Node, NPM, Git e GitHub CLI
 $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
 
 # 1. Inicia o Vite se a porta 5173 nao estiver aberta
@@ -35,7 +35,7 @@ for ($i = 0; $i -lt 25; $i++) {
     }
 }
 
-# Se ja tinha link no server_url.json e nao mudou, podemos usar se cloudflared estiver de pe
+# Se ja tinha link no server_url.json e cloudflared continua ativo
 if (-not $link -and (Test-Path "$projectDir\server_url.json")) {
     try {
         $existing = Get-Content "$projectDir\server_url.json" -Raw | ConvertFrom-Json
@@ -48,20 +48,12 @@ if ($link) {
     $jsonContent = "{`"url`":`"$link`"}"
     Set-Content -Path "$projectDir\server_url.json" -Value $jsonContent -Encoding UTF8
 
-    # 5. Publica no GitHub para atualizar os celulares automaticamente
-    try {
-        Set-Location $projectDir
-        git add server_url.json
-        git commit -m "chore: auto-update backend tunnel to $link [skip ci]" -ErrorAction SilentlyContinue
-        git push origin main -ErrorAction SilentlyContinue
-    } catch {}
-
-    # Fallback via gh api caso git push encontre divergencia
+    # 5. Publica no GitHub para os celulares dos AISANs conectarem instantaneamente
     try {
         $base64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($jsonContent))
         $sha = (gh api repos/sirgasgeo/aisan-conectado/contents/server_url.json --jq .sha 2>$null)
         if ($sha) {
-            gh api --method PUT repos/sirgasgeo/aisan-conectado/contents/server_url.json -f message="chore: update server url via api" -f content="$base64" -f sha="$sha" 2>$null
+            gh api --method PUT repos/sirgasgeo/aisan-conectado/contents/server_url.json -f message="chore: auto-update backend tunnel url to $link" -f content="$base64" -f sha="$sha" 2>$null | Out-Null
         }
     } catch {}
 
@@ -76,7 +68,7 @@ if ($link) {
   SISTEMA 100% OPERACIONAL E DEFINITIVO!
 =====================================================
 
-LINK OFICIAL DEFINITIVO (PARA O CELULAR):
+👉 LINK OFICIAL DEFINITIVO (PARA O CELULAR):
 $definitivoUrl
 
 * Este link e DEFINITIVO e NUNCA MAIS MUDA!
@@ -91,7 +83,7 @@ SINCRONIZACAO COM O COMPUTADOR:
 "@
     Set-Content -Path "$desktop\LINK_DEFINITIVO_DO_CELULAR.txt" -Value $txtContent
 
-    # Remove arquivo antigo com nome confuso se existir
+    # Remove atalhos antigos com nomes confusos
     if (Test-Path "$desktop\LINK_DO_CELULAR_ATUAL.txt") {
         Remove-Item "$desktop\LINK_DO_CELULAR_ATUAL.txt" -Force -ErrorAction SilentlyContinue
     }
