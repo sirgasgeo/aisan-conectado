@@ -60,20 +60,57 @@ function App() {
   const [isServerOnline, setIsServerOnline] = useState(false)
   const [isCheckingServer, setIsCheckingServer] = useState(false)
 
+  // Sincronização automática de relatórios pendentes quando o computador ligar
+  const syncPendingReports = useCallback(async () => {
+    try {
+      const saved = localStorage.getItem('aisan_meus_relatorios')
+      if (!saved) return
+      const list = JSON.parse(saved)
+      if (!Array.isArray(list)) return
+
+      let hasUpdates = false
+      for (let i = 0; i < list.length; i++) {
+        if (list[i].savedOnServer === false) {
+          try {
+            const res = await apiFetch('/api/reports', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(list[i])
+            })
+            if (res.ok) {
+              list[i].savedOnServer = true
+              hasUpdates = true
+            }
+          } catch (_) {}
+        }
+      }
+
+      if (hasUpdates) {
+        setMeusRelatorios([...list])
+        localStorage.setItem('aisan_meus_relatorios', JSON.stringify(list))
+      }
+    } catch (e) {
+      console.warn('Erro ao sincronizar relatórios pendentes:', e)
+    }
+  }, [])
+
   const verifyServerConnection = useCallback(async (showMessage = false) => {
     setIsCheckingServer(true)
     const online = await checkServerHealth()
     setIsServerOnline(online)
     setIsCheckingServer(false)
+    if (online) {
+      syncPendingReports()
+    }
     if (showMessage) {
       if (online) {
-        alert('🟢 Central SESANI Conectada!\n\nSeu computador está sincronizado. Todos os relatórios e fotos enviados cairão diretamente na pasta do OneDrive.')
+        alert('🟢 Central SESANI Conectada!\n\nSeu computador está ligado e sincronizado. Todos os relatórios e fotos enviados cairão diretamente na pasta do OneDrive.')
       } else {
-        alert('🟡 Central SESANI em espera.\n\nTentando conectar ao servidor do seu computador. Os relatórios continuam sendo salvos com segurança no aparelho.')
+        alert('🟡 Central SESANI em espera.\n\nO computador central está desligado no momento. Os relatórios continuam sendo salvos com segurança no seu celular e serão sincronizados automaticamente assim que o computador ligar!')
       }
     }
     return online
-  }, [])
+  }, [syncPendingReports])
 
   // Carregar relatórios locais do AISAN e inicializar conexão com servidor central
   useEffect(() => {
@@ -246,19 +283,6 @@ function App() {
       localStorage.setItem('aisan_aldeia_salvo', formData.aldeia.trim())
     } catch (_) {}
 
-    // Salva nos relatórios locais do AISAN com proteção contra estouro de memória (QuotaExceededError)
-    const updatedLocal = [newReport, ...meusRelatorios]
-    setMeusRelatorios(updatedLocal)
-    try {
-      localStorage.setItem('aisan_meus_relatorios', JSON.stringify(updatedLocal))
-    } catch (storageErr) {
-      console.warn('Armazenamento local cheio. Salvando versão compacta no histórico:', storageErr)
-      try {
-        const lightweight = updatedLocal.map(r => ({ ...r, fotos: [] }))
-        localStorage.setItem('aisan_meus_relatorios', JSON.stringify(lightweight))
-      } catch (_) {}
-    }
-
     let savedOnServer = false
 
     // 1. Envia para a Nuvem 24h (Supabase) se configurado
@@ -294,9 +318,26 @@ function App() {
       })
       if (res.ok) {
         savedOnServer = true
+        setIsServerOnline(true)
       }
     } catch (err) {
-      console.warn('Servidor local offline:', err)
+      console.warn('Servidor central offline:', err)
+    }
+
+    // Marca se o relatório já chegou na Central ou se está aguardando o PC ligar
+    newReport.savedOnServer = savedOnServer
+
+    // Salva nos relatórios locais do AISAN com proteção contra estouro de memória
+    const updatedLocal = [newReport, ...meusRelatorios]
+    setMeusRelatorios(updatedLocal)
+    try {
+      localStorage.setItem('aisan_meus_relatorios', JSON.stringify(updatedLocal))
+    } catch (storageErr) {
+      console.warn('Armazenamento local cheio. Salvando versão compacta no histórico:', storageErr)
+      try {
+        const lightweight = updatedLocal.map(r => ({ ...r, fotos: [] }))
+        localStorage.setItem('aisan_meus_relatorios', JSON.stringify(lightweight))
+      } catch (_) {}
     }
 
     setIsSubmitting(false)
@@ -897,6 +938,22 @@ function App() {
             <p>Lista dos relatórios salvos no seu aparelho:</p>
           </div>
 
+          {meusRelatorios.some(r => r.savedOnServer === false) && (
+            <div className="pending-sync-alert-box">
+              <span>⚠️ Há relatórios salvos no aparelho aguardando o computador central ligar para sincronizar.</span>
+              <button 
+                type="button" 
+                className="btn-sync-now"
+                onClick={async () => {
+                  await syncPendingReports()
+                  alert('Tentativa de sincronização concluída!')
+                }}
+              >
+                🔄 Sincronizar Agora com o Computador
+              </button>
+            </div>
+          )}
+
           {meusRelatorios.length === 0 ? (
             <div className="empty-box-card">
               <span className="empty-icon">📭</span>
@@ -941,6 +998,14 @@ function App() {
                        rep.status === 'em_analise' ? '🔵 Em Análise pelo SESANI' : 
                        '🟡 Recebido'}
                     </strong>
+                  </div>
+
+                  <div className="report-sync-pill">
+                    {rep.savedOnServer === false ? (
+                      <span className="sync-tag-pending">📱 Salvo no Celular (Aguardando PC ligar)</span>
+                    ) : (
+                      <span className="sync-tag-ok">☁️ Sincronizado no OneDrive</span>
+                    )}
                   </div>
                 </div>
               ))}
