@@ -689,6 +689,16 @@ body {
   background: #dbeafe;
 }
 
+.btn-cloud-config-action {
+  background: #f5f3ff;
+  color: #6d28d9;
+  border-color: #ddd6fe;
+}
+
+.btn-cloud-config-action:hover {
+  background: #ede9fe;
+}
+
 .sesani-cloud-status-badge {
   background: #f0fdf4;
   border: 1px solid #bbf7d0;

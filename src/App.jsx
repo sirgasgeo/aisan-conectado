@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
+import { getSupabaseClient, getSupabaseCredentials } from './lib/supabase'
 import './App.css'
 
 const POLOS_KAIAPO = [
@@ -48,6 +49,12 @@ function App() {
   const [searchQuery, setSearchQuery] = useState('')
   const [selectedReport, setSelectedReport] = useState(null)
 
+  // Configuração Supabase (Nuvem 24h)
+  const [showSupaModal, setShowSupaModal] = useState(false)
+  const [supaConfig, setSupaConfig] = useState(getSupabaseCredentials())
+  const [supaUrlInput, setSupaUrlInput] = useState(getSupabaseCredentials().url)
+  const [supaKeyInput, setSupaKeyInput] = useState(getSupabaseCredentials().key)
+
   // Carregar relatórios locais do AISAN
   useEffect(() => {
     try {
@@ -63,13 +70,46 @@ function App() {
   // Carregar relatórios do SESANI
   const loadSesaniReports = useCallback(async () => {
     setLoadingReports(true)
+
+    // 1. Tenta carregar do Supabase (Nuvem 24h)
+    const client = getSupabaseClient()
+    if (client) {
+      try {
+        const { data, error } = await client
+          .from('relatorios')
+          .select('*')
+          .order('id', { ascending: false })
+        if (!error && Array.isArray(data)) {
+          const mapped = data.map(r => ({
+            id: Number(r.id),
+            aisanNome: r.aisan_nome,
+            poloBase: r.polo_base,
+            aldeia: r.aldeia,
+            data: r.data,
+            tipo: r.tipo,
+            descricao: r.descricao,
+            fotos: r.fotos || [],
+            status: r.status || 'recebido',
+            timestamp: r.timestamp,
+            confirmadoPor: r.confirmado_por,
+            confirmadoEm: r.confirmado_em
+          }))
+          setAllReports(mapped)
+          setLoadingReports(false)
+          return
+        }
+      } catch (e) {
+        console.warn('Erro ao consultar Supabase:', e)
+      }
+    }
+
+    // 2. Fallback para backend local / OneDrive
     try {
       const res = await fetch('/api/reports')
       if (res.ok) {
         const data = await res.json()
         setAllReports(Array.isArray(data) ? data : [])
       } else {
-        // Fallback: junta relatórios locais
         const local = localStorage.getItem('aisan_meus_relatorios')
         setAllReports(local ? JSON.parse(local) : [])
       }
@@ -191,6 +231,31 @@ function App() {
 
     let savedOnServer = false
 
+    // 1. Envia para a Nuvem 24h (Supabase) se configurado
+    const client = getSupabaseClient()
+    if (client) {
+      try {
+        const { error } = await client.from('relatorios').insert([{
+          id: newReport.id,
+          aisan_nome: newReport.aisanNome,
+          polo_base: newReport.poloBase,
+          aldeia: newReport.aldeia,
+          data: newReport.data,
+          tipo: newReport.tipo,
+          descricao: newReport.descricao,
+          fotos: newReport.fotos,
+          status: 'recebido',
+          timestamp: newReport.timestamp
+        }])
+        if (!error) {
+          savedOnServer = true
+        }
+      } catch (supaErr) {
+        console.warn('Erro ao salvar no Supabase:', supaErr)
+      }
+    }
+
+    // 2. Envia para o servidor local / OneDrive se conectado
     try {
       const res = await fetch('/api/reports', {
         method: 'POST',
@@ -201,7 +266,7 @@ function App() {
         savedOnServer = true
       }
     } catch (err) {
-      console.warn('Servidor offline. Relatório salvo no aparelho:', err)
+      console.warn('Servidor local offline:', err)
     }
 
     setIsSubmitting(false)
@@ -409,8 +474,22 @@ function App() {
 
   // Atualizar status pelo SESANI e salvar PDF no OneDrive
   const handleUpdateStatus = async (reportId, newStatus) => {
+    // 1. Atualiza no Supabase se configurado
+    const client = getSupabaseClient()
+    if (client) {
+      try {
+        await client.from('relatorios').update({
+          status: newStatus,
+          confirmado_por: newStatus === 'concluido' ? 'Coordenação SESANI Kaiapó' : null,
+          confirmado_em: newStatus === 'concluido' ? new Date().toISOString() : null
+        }).eq('id', reportId)
+      } catch (err) {
+        console.warn('Erro ao atualizar no Supabase:', err)
+      }
+    }
+
     try {
-      const res = await fetch('/api/reports/status', {
+      await fetch('/api/reports/status', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -419,30 +498,26 @@ function App() {
           confirmadoPor: 'Coordenação SESANI Kaiapó'
         })
       })
+    } catch (_) {}
 
-      if (res.ok) {
-        const targetReport = allReports.find(r => r.id === reportId)
-        const updatedReport = {
-          ...targetReport,
-          status: newStatus,
-          confirmadoPor: newStatus === 'concluido' ? 'Coordenação SESANI Kaiapó' : targetReport?.confirmadoPor,
-          confirmadoEm: newStatus === 'concluido' ? new Date().toISOString() : targetReport?.confirmadoEm
-        }
+    const targetReport = allReports.find(r => r.id === reportId)
+    const updatedReport = {
+      ...targetReport,
+      status: newStatus,
+      confirmadoPor: newStatus === 'concluido' ? 'Coordenação SESANI Kaiapó' : targetReport?.confirmadoPor,
+      confirmadoEm: newStatus === 'concluido' ? new Date().toISOString() : targetReport?.confirmadoEm
+    }
 
-        setAllReports(prev => prev.map(r => r.id === reportId ? updatedReport : r))
-        if (selectedReport && selectedReport.id === reportId) {
-          setSelectedReport(updatedReport)
-        }
+    setAllReports(prev => prev.map(r => r.id === reportId ? updatedReport : r))
+    if (selectedReport && selectedReport.id === reportId) {
+      setSelectedReport(updatedReport)
+    }
 
-        // Se confirmou o recebimento / concluiu:
-        if (newStatus === 'concluido' && updatedReport) {
-          // Gera o PDF Oficial com as fotos reais e salva direto na pasta do OneDrive!
-          await handleGerarPDFOficial(updatedReport, { download: true, openTab: true })
-          alert(`✅ Recebimento confirmado com sucesso!\n\nO Relatório Oficial com todas as fotos foi gerado e salvo direto na pasta do OneDrive:\nOneDrive\\AISAN_Dados\\Relatorio_Oficial_${updatedReport.aisanNome}_${updatedReport.aldeia}_${updatedReport.data}.pdf`)
-        }
-      }
-    } catch (err) {
-      alert('Erro ao atualizar status do relatório.')
+    // Se confirmou o recebimento / concluiu:
+    if (newStatus === 'concluido' && updatedReport) {
+      // Gera o PDF Oficial com as fotos reais e salva direto na pasta do OneDrive!
+      await handleGerarPDFOficial(updatedReport, { download: true, openTab: false })
+      alert(`✅ Recebimento confirmado com sucesso!\n\nO Relatório Oficial com todas as fotos foi gerado e salvo direto na pasta do OneDrive:\nOneDrive\\AISAN_Dados\\Relatorio_Oficial_${updatedReport.aisanNome}_${updatedReport.aldeia}_${updatedReport.data}.pdf`)
     }
   }
 
@@ -452,37 +527,41 @@ function App() {
       return
     }
 
+    // 1. Apaga no Supabase se configurado
+    const client = getSupabaseClient()
+    if (client) {
+      try {
+        await client.from('relatorios').delete().eq('id', reportId)
+      } catch (err) {
+        console.warn('Erro ao excluir no Supabase:', err)
+      }
+    }
+
     try {
-      const res = await fetch('/api/reports/delete', {
+      await fetch('/api/reports/delete', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id: reportId })
       })
+    } catch (_) {}
 
-      if (res.ok) {
-        setAllReports(prev => prev.filter(r => r.id !== reportId))
-        setMeusRelatorios(prev => prev.filter(r => r.id !== reportId))
+    setAllReports(prev => prev.filter(r => r.id !== reportId))
+    setMeusRelatorios(prev => prev.filter(r => r.id !== reportId))
 
-        // Limpa do cache local
-        try {
-          const local = localStorage.getItem('aisan_meus_relatorios')
-          if (local) {
-            const parsed = JSON.parse(local).filter(r => r.id !== reportId)
-            localStorage.setItem('aisan_meus_relatorios', JSON.stringify(parsed))
-          }
-        } catch (_) {}
-
-        if (selectedReport && selectedReport.id === reportId) {
-          setSelectedReport(null)
-        }
-
-        alert('🗑️ Relatório apagado com sucesso!')
-      } else {
-        alert('Erro ao apagar relatório no servidor.')
+    // Limpa do cache local
+    try {
+      const local = localStorage.getItem('aisan_meus_relatorios')
+      if (local) {
+        const parsed = JSON.parse(local).filter(r => r.id !== reportId)
+        localStorage.setItem('aisan_meus_relatorios', JSON.stringify(parsed))
       }
-    } catch (err) {
-      alert('Erro de conexão ao tentar apagar relatório.')
+    } catch (_) {}
+
+    if (selectedReport && selectedReport.id === reportId) {
+      setSelectedReport(null)
     }
+
+    alert('🗑️ Relatório apagado com sucesso!')
   }
 
   // Filtragem dos relatórios na área SESANI
@@ -963,6 +1042,13 @@ function App() {
                     ☁️ Abrir Pasta Nuvem
                   </button>
                   <button 
+                    className="btn-sesani-action btn-cloud-config-action"
+                    onClick={() => setShowSupaModal(true)}
+                    title="Configurar banco de dados na nuvem Supabase 24h"
+                  >
+                    {supaConfig.isConfigured ? '🟢 Nuvem 24h: Conectada' : '⚙️ Conectar Nuvem 24h'}
+                  </button>
+                  <button 
                     className="btn-sesani-action"
                     onClick={loadSesaniReports}
                     disabled={loadingReports}
@@ -982,6 +1068,70 @@ function App() {
               <div className="sesani-cloud-status-badge">
                 <span>🟢 <strong>Sincronização Ativa:</strong> Salvando automaticamente na pasta do OneDrive (Ministério da Saúde e Pessoal).</span>
               </div>
+
+              {/* MODAL CONFIGURAÇÃO SUPABASE */}
+              {showSupaModal && (
+                <div className="modal-overlay" onClick={() => setShowSupaModal(false)}>
+                  <div className="modal-content" onClick={e => e.stopPropagation()} style={{ maxWidth: '520px' }}>
+                    <div className="modal-header">
+                      <div>
+                        <h2>⚡ Conexão Nuvem 24h (Supabase)</h2>
+                        <p>Permite que os AISANs enviem relatórios mesmo com o PC desligado</p>
+                      </div>
+                      <button className="btn-close" onClick={() => setShowSupaModal(false)}>✕</button>
+                    </div>
+                    <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                      <p style={{ fontSize: '0.92rem', color: '#475569' }}>
+                        Cole aqui a <strong>URL</strong> e a chave <strong>anon key</strong> do seu projeto Supabase:
+                      </p>
+                      <div>
+                        <label style={{ fontSize: '0.85rem', fontWeight: 700, display: 'block', marginBottom: '0.3rem' }}>Project URL:</label>
+                        <input 
+                          type="text" 
+                          placeholder="https://xyzcompany.supabase.co" 
+                          value={supaUrlInput}
+                          onChange={e => setSupaUrlInput(e.target.value.trim())}
+                          style={{ width: '100%', padding: '0.75rem', borderRadius: '6px', border: '1px solid #cbd5e1' }}
+                        />
+                      </div>
+                      <div>
+                        <label style={{ fontSize: '0.85rem', fontWeight: 700, display: 'block', marginBottom: '0.3rem' }}>Anon Public Key:</label>
+                        <textarea 
+                          placeholder="eyJhbGciOi..."
+                          rows={3}
+                          value={supaKeyInput}
+                          onChange={e => setSupaKeyInput(e.target.value.trim())}
+                          style={{ width: '100%', padding: '0.75rem', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '0.82rem' }}
+                        />
+                      </div>
+                      <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem' }}>
+                        <button 
+                          className="btn-huge btn-primary-send"
+                          style={{ flex: 1, padding: '0.8rem' }}
+                          onClick={() => {
+                            localStorage.setItem('aisan_supabase_url', supaUrlInput)
+                            localStorage.setItem('aisan_supabase_anon_key', supaKeyInput)
+                            const updated = getSupabaseCredentials()
+                            setSupaConfig(updated)
+                            setShowSupaModal(false)
+                            loadSesaniReports()
+                            alert('✅ Conexão com Supabase salva com sucesso!')
+                          }}
+                        >
+                          💾 Salvar Conexão
+                        </button>
+                        <button 
+                          className="btn-huge btn-secondary-reports"
+                          style={{ padding: '0.8rem 1.2rem' }}
+                          onClick={() => setShowSupaModal(false)}
+                        >
+                          Cancelar
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {/* FILTROS E BUSCA */}
               <div className="sesani-filters-bar">
