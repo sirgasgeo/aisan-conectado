@@ -118,9 +118,13 @@ function App() {
     getApiBaseUrl()
     verifyServerConnection()
 
+    // Verificações rápidas no início para conectar na hora
+    const t1 = setTimeout(() => verifyServerConnection(), 2000)
+    const t2 = setTimeout(() => verifyServerConnection(), 5000)
+
     const interval = setInterval(() => {
       verifyServerConnection()
-    }, 20000)
+    }, 15000)
 
     try {
       const saved = localStorage.getItem('aisan_meus_relatorios')
@@ -131,7 +135,11 @@ function App() {
       console.warn('Erro ao carregar relatórios locais:', e)
     }
 
-    return () => clearInterval(interval)
+    return () => {
+      clearTimeout(t1)
+      clearTimeout(t2)
+      clearInterval(interval)
+    }
   }, [verifyServerConnection])
 
   // Carregar relatórios do SESANI

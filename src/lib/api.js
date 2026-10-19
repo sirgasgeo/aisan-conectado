@@ -1,16 +1,16 @@
 // src/lib/api.js
-// Gerenciador de conexão dinâmico entre o frontend permanente (GitHub Pages)
-// e o servidor local do computador de Paulo (OneDrive)
+// Gerenciador de conexão ultra-rápido entre o app do celular e a Central SESANI (OneDrive)
 
-const GITHUB_SERVER_URL = 'https://raw.githubusercontent.com/sirgasgeo/aisan-conectado/main/server_url.json'
+const GITHUB_RAW_URL = 'https://raw.githubusercontent.com/sirgasgeo/aisan-conectado/main/server_url.json'
 const STORAGE_KEY = 'aisan_backend_url'
 
-let cachedBaseUrl = localStorage.getItem(STORAGE_KEY) || 'https://modes-tag-favorites-compaq.trycloudflare.com'
-let lastFetchTime = 0
+let cachedBaseUrl = ''
+try {
+  cachedBaseUrl = localStorage.getItem(STORAGE_KEY) || ''
+} catch (_) {}
 
-/**
- * Retorna true se estiver rodando localmente no computador
- */
+let activeFetchPromise = null
+
 export function isLocalhost() {
   if (typeof window === 'undefined') return false
   const host = window.location.hostname
@@ -18,58 +18,103 @@ export function isLocalhost() {
 }
 
 /**
- * Busca a URL pública ativa do servidor do computador registrada no GitHub
+ * Busca a URL do servidor diretamente do GitHub sem travar o app
  */
-export async function getApiBaseUrl(force = false) {
-  if (isLocalhost()) {
-    return ''
+export async function getApiBaseUrl(forceRefresh = false) {
+  if (isLocalhost()) return ''
+
+  // Se já temos a URL e não é refresh forçado, retorna imediatamente
+  if (cachedBaseUrl && !forceRefresh) {
+    return cachedBaseUrl
   }
 
-  const now = Date.now()
-  // Atualiza se forçado, se não tiver cache ou a cada 45 segundos
-  if (force || !cachedBaseUrl || (now - lastFetchTime > 45000)) {
+  // Evita múltiplas chamadas simultâneas de rede
+  if (activeFetchPromise && !forceRefresh) {
+    return activeFetchPromise
+  }
+
+  activeFetchPromise = (async () => {
     try {
-      const res = await fetch(`${GITHUB_SERVER_URL}?t=${now}`, { cache: 'no-store' })
+      // 1. Tenta buscar no GitHub raw com timeout curto de 3.5s
+      const res = await fetch(`${GITHUB_RAW_URL}?t=${Date.now()}`, {
+        cache: 'no-store',
+        signal: AbortSignal.timeout(3500)
+      })
       if (res.ok) {
         const data = await res.json()
         if (data && data.url) {
           const cleanUrl = data.url.replace(/\/$/, '')
           cachedBaseUrl = cleanUrl
-          lastFetchTime = now
-          localStorage.setItem(STORAGE_KEY, cleanUrl)
+          try { localStorage.setItem(STORAGE_KEY, cleanUrl) } catch (_) {}
           return cleanUrl
         }
       }
-    } catch (err) {
-      console.warn('Erro ao consultar servidor dinâmico:', err)
+    } catch (e) {
+      console.warn('Tentando fallback de URL do servidor...', e)
+    } finally {
+      activeFetchPromise = null
     }
-  }
 
-  return cachedBaseUrl || 'https://modes-tag-favorites-compaq.trycloudflare.com'
+    // Se falhou mas temos no localStorage, usa como último recurso
+    try {
+      const local = localStorage.getItem(STORAGE_KEY)
+      if (local && local.startsWith('https://')) {
+        cachedBaseUrl = local
+        return local
+      }
+    } catch (_) {}
+
+    return cachedBaseUrl
+  })()
+
+  return activeFetchPromise
 }
 
 /**
- * Testa se o servidor do computador está online e respondendo
+ * Testa se a Central está online e respondendo em alta velocidade
  */
-export async function checkServerHealth() {
+export async function checkServerHealth(force = false) {
+  let base = await getApiBaseUrl(force)
+  if (!base) {
+    base = await getApiBaseUrl(true)
+  }
+  if (!base) return false
+
   try {
-    const base = await getApiBaseUrl()
-    const url = `${base}/api/status`
-    const res = await fetch(url, { 
+    const res = await fetch(`${base}/api/status?t=${Date.now()}`, {
       method: 'GET',
       headers: { 'Accept': 'application/json' },
-      signal: AbortSignal.timeout(5000)
+      signal: AbortSignal.timeout(3000)
     })
     if (res.ok) {
       const data = await res.json()
       return data && data.status === 'online'
     }
-  } catch (_) {}
+  } catch (err) {
+    // Se falhou com a URL em cache, pode ser que o PC tenha reiniciado e gerado um novo túnel!
+    // Força a atualização imediata da rota no GitHub e tenta de novo NA HORA:
+    if (!force) {
+      try {
+        const freshBase = await getApiBaseUrl(true)
+        if (freshBase && freshBase !== base) {
+          const retryRes = await fetch(`${freshBase}/api/status?t=${Date.now()}`, {
+            method: 'GET',
+            headers: { 'Accept': 'application/json' },
+            signal: AbortSignal.timeout(3000)
+          })
+          if (retryRes.ok) {
+            const retryData = await retryRes.json()
+            return retryData && retryData.status === 'online'
+          }
+        }
+      } catch (_) {}
+    }
+  }
   return false
 }
 
 /**
- * Faz requisições para a API direcionando automaticamente para o servidor do PC
+ * Envia dados para a Central com auto-recuperação de túnel
  */
 export async function apiFetch(endpoint, options = {}) {
   let base = isLocalhost() ? '' : await getApiBaseUrl()
@@ -77,9 +122,8 @@ export async function apiFetch(endpoint, options = {}) {
 
   try {
     let response = await fetch(fullUrl, options)
-    
-    // Se o servidor respondeu com erro (404, 502, 503, 530), tenta atualizar a rota e reenviar
-    if (!response.ok && !isLocalhost() && response.status >= 500) {
+    // Se der erro de túnel ou servidor (502, 503, 530, 404), atualiza e retenta
+    if (!response.ok && !isLocalhost() && (response.status >= 500 || response.status === 404)) {
       const refreshedBase = await getApiBaseUrl(true)
       if (refreshedBase && refreshedBase !== base) {
         fullUrl = `${refreshedBase}${endpoint}`
@@ -88,7 +132,7 @@ export async function apiFetch(endpoint, options = {}) {
     }
     return response
   } catch (err) {
-    // Se deu erro de rede (CORS ou offline do tunnel antigo), atualiza rota e retenta
+    // Erro de rede (ex: túnel antigo caiu), força buscar a nova rota e retenta
     if (!isLocalhost()) {
       try {
         const refreshedBase = await getApiBaseUrl(true)
