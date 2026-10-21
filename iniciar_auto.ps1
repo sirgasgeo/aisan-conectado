@@ -9,7 +9,7 @@ $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";"
 # 1. Inicia o Vite se a porta 5173 nao estiver aberta
 $isPortListening = (Get-NetTCPConnection -LocalPort 5173 -State Listen -ErrorAction SilentlyContinue)
 if (-not $isPortListening) {
-    Start-Process -FilePath "cmd.exe" -ArgumentList "/c npm run dev" -WorkingDirectory $projectDir -WindowStyle Hidden
+    Start-Process -FilePath "cmd.exe" -ArgumentList "/c node server.js" -WorkingDirectory $projectDir -WindowStyle Hidden
     Start-Sleep -Seconds 4
 }
 
