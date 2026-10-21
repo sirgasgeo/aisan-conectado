@@ -339,7 +339,7 @@ export default defineConfig({
       methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
       allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin']
     },
-    allowedHosts: true // Permite acesso por tunnels públicos (Cloudflare, etc.) sem erro 403
+    allowedHosts: ['.trycloudflare.com', '.loca.lt', 'localhost', '127.0.0.1'] // Permite acesso por tunnels públicos (Cloudflare, etc.) sem erro 403
   },
   plugins: [react(), aisanBackendPlugin()],
 })
