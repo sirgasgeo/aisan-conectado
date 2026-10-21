@@ -30,7 +30,7 @@ async function migrate() {
       descricao: r.descricao || '',
       fotos: r.fotos || [],
       status: r.status || 'recebido',
-      timestamp: r.timestamp || Date.now(),
+      timestamp: typeof r.timestamp === 'number' ? r.timestamp : (Date.parse(r.timestamp) || Date.now()),
       confirmado_por: r.confirmadoPor || null,
       confirmado_em: r.confirmadoEm || null
     }

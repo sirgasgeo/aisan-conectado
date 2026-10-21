@@ -307,7 +307,7 @@ function App() {
           descricao: newReport.descricao,
           fotos: newReport.fotos,
           status: 'recebido',
-          timestamp: newReport.timestamp
+          timestamp: typeof newReport.timestamp === 'number' ? newReport.timestamp : (Date.parse(newReport.timestamp) || Date.now())
         }])
         if (!error) {
           savedOnServer = true

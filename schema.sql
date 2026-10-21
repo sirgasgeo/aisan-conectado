@@ -8,7 +8,7 @@ CREATE TABLE IF NOT EXISTS relatorios (
   descricao TEXT,
   fotos JSONB DEFAULT '[]'::jsonb,
   status TEXT DEFAULT 'recebido',
-  timestamp BIGINT,
+  timestamp TEXT,
   confirmado_por TEXT,
   confirmado_em TEXT,
   created_at TIMESTAMPTZ DEFAULT NOW()
