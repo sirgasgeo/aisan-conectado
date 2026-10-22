@@ -6,9 +6,9 @@ const key = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZi
 const supabase = createClient(url, key)
 
 async function test() {
-  const { data, error } = await supabase.from('relatorios').select('*')
-  console.log('DATA:', data)
-  console.log('ERROR:', error)
+  const { data, error } = await supabase.from('relatorios').select('id, aisan_nome, aldeia, tipo, data')
+  console.log('COUNT IN SUPABASE:', data ? data.length : 0)
+  console.log('REPORTS:', data)
 }
 
 test()
