@@ -118,6 +118,133 @@ function App() {
     }
   }, [])
 
+  const [isLoadingHistory, setIsLoadingHistory] = useState(false)
+
+  // Sincroniza e restaura o histórico do AISAN com a Central (OneDrive + Supabase)
+  const syncMeusRelatoriosComCentral = useCallback(async (forced = false) => {
+    let nome = (formData.aisanNome || localStorage.getItem('aisan_nome_salvo') || '').trim()
+
+    // Se não tiver nome salvo, tenta recuperar do histórico local pré-existente
+    if (!nome) {
+      const saved = localStorage.getItem('aisan_meus_relatorios')
+      if (saved) {
+        try {
+          const parsed = JSON.parse(saved)
+          if (Array.isArray(parsed) && parsed.length > 0 && parsed[0].aisanNome) {
+            nome = parsed[0].aisanNome.trim()
+            setFormData(prev => ({ ...prev, aisanNome: nome }))
+            localStorage.setItem('aisan_nome_salvo', nome)
+          }
+        } catch (_) {}
+      }
+    }
+
+    // Se ainda não tiver nome e for uma restauração manual solicitada pelo usuário
+    if (!nome && forced) {
+      const inputNome = window.prompt('Para restaurar seu histórico da Central, digite seu nome de AISAN:')
+      if (inputNome && inputNome.trim()) {
+        nome = inputNome.trim()
+        setFormData(prev => ({ ...prev, aisanNome: nome }))
+        localStorage.setItem('aisan_nome_salvo', nome)
+      } else {
+        return
+      }
+    }
+
+    if (!nome) return
+
+    setIsLoadingHistory(true)
+    let fetchedReports = []
+
+    try {
+      // 1. Tenta buscar no Supabase se configurado (Nuvem 24h)
+      const client = getSupabaseClient()
+      if (client) {
+        try {
+          const { data, error } = await client
+            .from('relatorios')
+            .select('*')
+            .ilike('aisan_nome', `%${nome}%`)
+            .order('id', { ascending: false })
+          if (!error && Array.isArray(data) && data.length > 0) {
+            const mapped = data.map(r => ({
+              id: Number(r.id),
+              aisanNome: r.aisan_nome,
+              poloBase: r.polo_base,
+              aldeia: r.aldeia,
+              data: r.data,
+              tipo: r.tipo,
+              descricao: r.descricao,
+              fotos: r.fotos || [],
+              status: r.status || 'recebido',
+              timestamp: r.timestamp,
+              confirmadoPor: r.confirmado_por,
+              confirmadoEm: r.confirmado_em,
+              savedOnServer: true
+            }))
+            fetchedReports = fetchedReports.concat(mapped)
+          }
+        } catch (e) {
+          console.warn('Erro ao consultar Supabase para histórico:', e)
+        }
+      }
+
+      // 2. Busca na Central SESANI (OneDrive) via API local ou túnel Cloudflare
+      try {
+        const res = await apiFetch(`/api/reports?aisan=${encodeURIComponent(nome)}`)
+        if (res.ok) {
+          const serverReports = await res.json()
+          if (Array.isArray(serverReports) && serverReports.length > 0) {
+            const mapped = serverReports.map(r => ({ ...r, savedOnServer: true }))
+            fetchedReports = fetchedReports.concat(mapped)
+          }
+        }
+      } catch (e) {
+        console.warn('Erro ao consultar API Central para histórico:', e)
+      }
+
+      // Mescla relatórios obtidos com os relatórios locais sem duplicidade
+      if (fetchedReports.length > 0) {
+        setMeusRelatorios(prev => {
+          const map = new Map()
+          fetchedReports.forEach(r => map.set(r.id, r))
+          prev.forEach(r => {
+            if (!map.has(r.id)) {
+              map.set(r.id, r)
+            } else {
+              const serverVersion = map.get(r.id)
+              map.set(r.id, { ...r, ...serverVersion, savedOnServer: true })
+            }
+          })
+          const merged = Array.from(map.values()).sort((a, b) => (b.id || 0) - (a.id || 0))
+          try {
+            localStorage.setItem('aisan_meus_relatorios', JSON.stringify(merged))
+          } catch (_) {
+            // Em aparelhos com limite restrito de quota de localStorage (5MB)
+            try {
+              const compact = merged.map(r => ({ ...r, fotos: (r.fotos || []).slice(0, 1) }))
+              localStorage.setItem('aisan_meus_relatorios', JSON.stringify(compact))
+            } catch (_) {}
+          }
+          return merged
+        })
+
+        if (forced) {
+          alert(`✅ Histórico restaurado com sucesso!\n\nForam sincronizados ${fetchedReports.length} relatório(s) arquivados na Central para "${nome}".`)
+        }
+      } else if (forced) {
+        alert(`Nenhum relatório anterior foi encontrado na Central para o nome "${nome}".`)
+      }
+    } catch (err) {
+      console.warn('Erro ao sincronizar histórico com a Central:', err)
+      if (forced) {
+        alert('Não foi possível conectar à Central no momento. Verifique sua conexão com a internet.')
+      }
+    } finally {
+      setIsLoadingHistory(false)
+    }
+  }, [formData.aisanNome])
+
   const verifyServerConnection = useCallback(async (showMessage = false) => {
     setIsCheckingServer(true)
     let online = false
@@ -138,6 +265,7 @@ function App() {
 
     if (online) {
       syncPendingReports()
+      syncMeusRelatoriosComCentral()
     }
 
     if (showMessage) {
@@ -148,7 +276,7 @@ function App() {
       }
     }
     return online
-  }, [syncPendingReports])
+  }, [syncPendingReports, syncMeusRelatoriosComCentral])
 
   // Carregar relatórios locais do AISAN e inicializar conexão com servidor central
   useEffect(() => {
@@ -239,6 +367,12 @@ function App() {
       loadSesaniReports()
     }
   }, [isSesaniAuth, currentView, loadSesaniReports])
+
+  useEffect(() => {
+    if (currentView === 'meus-relatorios') {
+      syncMeusRelatoriosComCentral(false)
+    }
+  }, [currentView, syncMeusRelatoriosComCentral])
 
   // Função para comprimir fotos tiradas no celular (evita travar o envio e economiza memória)
   const compressImageFile = (file, maxWidth = 1280, quality = 0.75) => {
@@ -843,7 +977,11 @@ function App() {
                   className="field-input-large"
                   placeholder="Ex: Paulo Kaiapó"
                   value={formData.aisanNome}
-                  onChange={(e) => setFormData({ ...formData, aisanNome: e.target.value })}
+                  onChange={(e) => {
+                    const val = e.target.value
+                    setFormData({ ...formData, aisanNome: val })
+                    localStorage.setItem('aisan_nome_salvo', val)
+                  }}
                   required
                 />
               </div>
@@ -980,8 +1118,48 @@ function App() {
           </button>
 
           <div className="screen-header-box">
-            <h2>Meus Relatórios Enviados</h2>
-            <p>Lista dos relatórios salvos no seu aparelho:</p>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.6rem' }}>
+              <h2>Meus Relatórios Enviados</h2>
+              <button 
+                type="button" 
+                className="btn-sync-now"
+                style={{ 
+                  padding: '7px 14px', 
+                  fontSize: '0.85rem',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  borderRadius: '8px'
+                }}
+                onClick={() => syncMeusRelatoriosComCentral(true)}
+                disabled={isLoadingHistory}
+              >
+                {isLoadingHistory ? '⏳ Restaurando...' : '🔄 Restaurar / Atualizar'}
+              </button>
+            </div>
+            <p>Lista dos relatórios arquivados no seu celular e na Central:</p>
+            {(formData.aisanNome || localStorage.getItem('aisan_nome_salvo')) && (
+              <div style={{ marginTop: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
+                <span style={{ fontSize: '0.85rem', color: '#0369a1', background: '#e0f2fe', padding: '4px 10px', borderRadius: '6px', fontWeight: '700' }}>
+                  👤 AISAN: {formData.aisanNome || localStorage.getItem('aisan_nome_salvo')}
+                </span>
+                <button
+                  type="button"
+                  style={{ background: 'none', border: 'none', color: '#0284c7', fontSize: '0.82rem', cursor: 'pointer', textDecoration: 'underline', padding: 0 }}
+                  onClick={() => {
+                    const novo = window.prompt('Digite o nome do AISAN para carregar o histórico correspondente:', formData.aisanNome || localStorage.getItem('aisan_nome_salvo') || '')
+                    if (novo && novo.trim()) {
+                      const limpo = novo.trim()
+                      setFormData(prev => ({ ...prev, aisanNome: limpo }))
+                      localStorage.setItem('aisan_nome_salvo', limpo)
+                      setTimeout(() => syncMeusRelatoriosComCentral(true), 100)
+                    }
+                  }}
+                >
+                  (Trocar AISAN)
+                </button>
+              </div>
+            )}
           </div>
 
           {meusRelatorios.some(r => r.savedOnServer === false) && (
@@ -1003,15 +1181,25 @@ function App() {
           {meusRelatorios.length === 0 ? (
             <div className="empty-box-card">
               <span className="empty-icon">📭</span>
-              <h3>Nenhum relatório encontrado</h3>
-              <p>Você ainda não enviou nenhum relatório por este celular.</p>
-              <button 
-                className="btn-huge btn-primary-send"
-                style={{ marginTop: '1rem' }}
-                onClick={() => setCurrentView('enviar')}
-              >
-                📝 Enviar Meu Primeiro Relatório
-              </button>
+              <h3>Nenhum relatório neste aparelho</h3>
+              <p>Seus relatórios enviados não são perdidos: eles ficam gravados com total segurança na Central do SESANI e na Nuvem.</p>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginTop: '1.25rem', width: '100%', maxWidth: '320px' }}>
+                <button 
+                  type="button"
+                  className="btn-huge"
+                  style={{ background: '#0284c7', color: '#fff', fontSize: '1rem', padding: '14px', borderRadius: '8px', border: 'none', cursor: 'pointer', fontWeight: 'bold' }}
+                  onClick={() => syncMeusRelatoriosComCentral(true)}
+                  disabled={isLoadingHistory}
+                >
+                  {isLoadingHistory ? '⏳ Restaurando da Central...' : '🔄 Restaurar Meu Histórico da Central'}
+                </button>
+                <button 
+                  className="btn-huge btn-primary-send"
+                  onClick={() => setCurrentView('enviar')}
+                >
+                  📝 Enviar Novo Relatório
+                </button>
+              </div>
             </div>
           ) : (
             <div className="reports-list-cards">
@@ -1050,7 +1238,7 @@ function App() {
                     {rep.savedOnServer === false ? (
                       <span className="sync-tag-pending">📱 Salvo no Celular (Aguardando PC ligar)</span>
                     ) : (
-                      <span className="sync-tag-ok">☁️ Sincronizado no OneDrive</span>
+                      <span className="sync-tag-ok">🟢 Seguro na Central / Nuvem</span>
                     )}
                   </div>
                 </div>

@@ -62,7 +62,10 @@ function writeAllReports(reports) {
   dirs.forEach(dir => {
     try {
       const file = path.join(dir, 'relatorios_sesani.json')
-      fs.writeFileSync(file, JSON.stringify(reports, null, 2), 'utf-8')
+      const backup = path.join(dir, 'relatorios_sesani.backup.json')
+      const json = JSON.stringify(reports, null, 2)
+      fs.writeFileSync(file, json, 'utf-8')
+      try { fs.writeFileSync(backup, json, 'utf-8') } catch (_) {}
     } catch (e) {
       console.warn(`Erro ao salvar relatorios_sesani em ${dir}:`, e)
     }
@@ -115,9 +118,40 @@ function aisanBackendPlugin() {
           return
         }
 
-        // Endpoint: Listar todos os relatórios (Área SESANI)
+        // Endpoint: Listar todos os relatórios (Área SESANI ou histórico individual do AISAN)
         if (url.pathname === '/api/reports' && req.method === 'GET') {
-          const reports = readAllReports()
+          const aisanFilter = (url.searchParams.get('aisan') || '').trim()
+          let reports = readAllReports()
+
+          if (aisanFilter) {
+            const safeName = aisanFilter.replace(/[^a-zA-Z0-9_\-\u00C0-\u017F]/g, '_')
+            const dirs = getAllOneDrivePaths()
+            let individualReports = []
+            for (const dir of dirs) {
+              const indFile = path.join(dir, `atividades_${safeName}.json`)
+              if (fs.existsSync(indFile)) {
+                try {
+                  const data = JSON.parse(fs.readFileSync(indFile, 'utf-8'))
+                  if (Array.isArray(data) && data.length > 0) {
+                    individualReports = data
+                    break
+                  }
+                } catch (_) {}
+              }
+            }
+
+            const lowerFilter = aisanFilter.toLowerCase()
+            const filteredMaster = reports.filter(r => {
+              const name = (r.aisanNome || '').toLowerCase().trim()
+              return name === lowerFilter || name.includes(lowerFilter) || lowerFilter.includes(name)
+            })
+
+            const map = new Map()
+            individualReports.forEach(r => map.set(r.id, r))
+            filteredMaster.forEach(r => map.set(r.id, r))
+            reports = Array.from(map.values()).sort((a, b) => (b.id || 0) - (a.id || 0))
+          }
+
           res.setHeader('Content-Type', 'application/json')
           res.end(JSON.stringify(reports))
           return
